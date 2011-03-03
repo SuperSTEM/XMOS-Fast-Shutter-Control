@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cdtprojectproperties>
+<section name="org.eclipse.cdt.internal.ui.wizards.settingswizards.IncludePaths">
+<language name="XN File">
+
+</language>
+<language name="o">
+
+</language>
+<language name="XTA Script">
+
+</language>
+<language name="XC Source File">
+
+</language>
+<language name="XN File">
+
+</language>
+<language name="C Source File">
+
+</language>
+<language name="C++ Source File">
+
+</language>
+<language name="s,S">
+
+</language>
+<language name="XN File">
+
+</language>
+</section>
+<section name="org.eclipse.cdt.internal.ui.wizards.settingswizards.Macros">
+<language name="XN File">
+
+</language>
+<language name="o">
+
+</language>
+<language name="XTA Script">
+
+</language>
+<language name="XC Source File">
+
+</language>
+<language name="XN File">
+
+</language>
+<language name="C Source File">
+
+</language>
+<language name="C++ Source File">
+
+</language>
+<language name="s,S">
+
+</language>
+<language name="XN File">
+
+</language>
+</section>
+</cdtprojectproperties>
