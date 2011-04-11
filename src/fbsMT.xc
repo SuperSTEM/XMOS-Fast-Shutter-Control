@@ -22,10 +22,9 @@
 #define ON_STATE 0
 #define OFF_STATE 1
 
-/* If a positive output turns the beam on (opens the shutter)
- * #define ON_STATE 0
- * #define OFF_STATE 1
- */
+/* If a positive output turns the beam on (opens the shutter) */
+//#define ON_STATE 1
+//#define OFF_STATE 0
 
 typedef struct {
 	unsigned int nacqs ;
@@ -73,6 +72,8 @@ int main(void){
 }
 
 void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch2){
+	timer tmr;
+	unsigned time;
 	unsigned char nSettings;
 	// the settings as received from the serial port
 	timeset settings[255];
@@ -84,6 +85,7 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 	int STOP=1;
 	int GO=0;
 	int ctr;
+	int is_sync=0;
 
 	while(1)
 		{
@@ -96,9 +98,23 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 					go_ch2 <: GO;
 					break;
 				}
-				case rxd when pinsneq(1) :> void:  // comm received, incoming data
+				// comm received, incoming data
+				// received data should be 0.  This
+				case rxd when pinsneq(1) :> void:  //
 				{
-					// wait for process to finish
+					// if any channel is being used to synchronize, then reset the chip when comm is received.
+					// this is done to work around locking up waiting for potentially non-existent sync signal.
+					if (is_sync==1) {
+						tmr :> time;
+						// start bit + 1/2 bit offset (read in middle of bit) +
+						//         8 data bits + stop bit
+						time += 10*BIT_TIME+BIT_TIME/2;
+						tmr when timerafter(time) :> void;
+						txByte(0);
+						chipReset();
+					}
+					// wait for process to finish.  This should pretty much always take long enough that
+					// the serial comm sync doesn't create any weird received values on the other end.
 					select
 					{
 						case go_ch1 :> pDone:
@@ -116,23 +132,26 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 					// tell process to wait for new input
 					go_ch1 <: STOP;
 					go_ch2 <: STOP;
+					wait(5000);
 					// tell computer you're ready for data
 					txByte(255);
 					nSettings=rxByte(); // get number of settings
 					// tell number of settings to process threads
-					// nsettings = 0 means turn off beam
+					// nsettings = 0 means close shutter
 					if (nSettings == 0){
 						set_ch1 <: (unsigned char)1;
 						set_ch2 <: (unsigned char)1;
 						set_ch1 <: OFF_SETTING;
 						set_ch2 <: ON_SETTING;
+						is_sync=0;
 					}
-					// nsettings = 255 means turn on beam
+					// nsettings = 255 means open shutter
 					else if (nSettings == 255){
 						set_ch1 <: (unsigned char)1;
 						set_ch2 <: (unsigned char)1;
 						set_ch1 <: ON_SETTING;
 						set_ch2 <: ON_SETTING;
+						is_sync=0;
 					}
 					// anything else is a series of on/off sequences
 					else
@@ -148,6 +167,7 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 							settings[i].output_interleave=rxByte();
 						}
 						ctr=0;
+						is_sync=0;
 						while (ctr < nSettings) {
 							if (settings[ctr].output_interleave==1){
 								set_out_1[ctr] = settings[ctr];
@@ -162,6 +182,9 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 								settings[ctr].onUnits='o';
 								set_out_2[ctr] = settings[ctr];
 								ctr+=1;
+							}
+							if ((settings[ctr].sync>0)) {
+								is_sync=1;
 							}
 						}
 						set_ch1 <: nSettings;
@@ -189,19 +212,24 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 	while (1) {
 		for (int i = 0; i < nSettings; i+=1) {
 			for (unsigned j = 0; j < settings[i].nacqs; j += 1){
+				// if settings says turn off, turn off for 250 msec, then stay off
 				if (settings[i].onUnits=='x') setDelay(250,'m',out_port,OFF_STATE,OFF_STATE);
 				else if (settings[i].onUnits=='o') setDelay(250,'m',out_port,ON_STATE,ON_STATE);
 				else {
+					// make sure the shutter is off while waiting for sync signal
+					out_port <: OFF_STATE;
 					// camera hardware sync signal
 					// wait until camera signals that it is acquiring
 					if (settings[i].sync==1) {
-						ext_sync1 when pinseq (1) :> void;
-						thread_sync <: sync;
-					}
-					if (settings[i].sync==2) {
+							//waits for sync signal
+							ext_sync1 when pinseq (1) :> void;
+							// outputs sync signal to worker thread
+							thread_sync <: sync;
+							}
+					else if (settings[i].sync==2) {
 						ext_sync2 when pinseq (1) :> void;
 						thread_sync <: sync;
-					}
+						}
 
 					setDelay(settings[i].setupTime,settings[i].setupUnits,out_port,OFF_STATE,OFF_STATE);
 					setDelay(settings[i].onTime,settings[i].onUnits,out_port,ON_STATE,OFF_STATE);
@@ -209,14 +237,17 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 					// camera hardware sync signal
 					// wait until camera signals that it is done acquiring.
 					if (settings[i].sync==1) {
-						ext_sync1 when pinseq (0) :> void;
-						thread_sync <: sync;
-					}
-					if (settings[i].sync==2) {
+							// waits for sync signal
+							ext_sync1 when pinseq (0) :> void;
+							// outputs sync signal to worker thread
+							thread_sync <: sync;
+							}
+					else if (settings[i].sync==2) {
 						ext_sync2 when pinseq (0) :> void;
 						thread_sync <: sync;
-					}
+						}
 				}
+				// Wait until worker thread is done with this loop
 				loop_sync :> sync;
 			}
 		}
@@ -246,22 +277,25 @@ void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 	while (1) {
 		for (int i = 0; i < nSettings; i+=1) {
 			for (unsigned j = 0; j < settings[i].nacqs; j += 1){
+				// camera hardware sync signal
+				// wait until camera signals that it is acquiring
+				if (settings[i].sync>0) {
+					out_port <: ON_STATE;
+					thread_sync :> sync;
+				}
 				if (settings[i].onUnits=='x') out_port <: OFF_STATE;
 				else if (settings[i].onUnits=='o') out_port <: ON_STATE;
 				else {
-					// camera hardware sync signal
-					// wait until camera signals that it is acquiring
-					if (settings[i].sync==1) thread_sync :> sync;
-					if (settings[i].sync==2) thread_sync :> sync;
+					// make sure the shutter is off while waiting for sync signal
 
 					setDelay(settings[i].setupTime,settings[i].setupUnits,out_port,OFF_STATE,OFF_STATE);
 					setDelay(settings[i].onTime,settings[i].onUnits,out_port,ON_STATE,OFF_STATE);
 
-					// camera hardware sync signal
-					// wait until camera signals that it is done acquiring.
-					if (settings[i].sync==1) thread_sync :> sync;
-					if (settings[i].sync==2) thread_sync :> sync;
 				}
+				// camera hardware sync signal
+				// wait until camera signals that it is done acquiring.
+				if (settings[i].sync>0) thread_sync :> sync;
+				// tell master thread you're done with this loop
 				loop_sync <: sync;
 			}
 		}
