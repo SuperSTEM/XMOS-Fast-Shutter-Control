@@ -18,7 +18,6 @@ C++_DEPS :=
 OBJS := 
 C_DEPS := 
 CC_DEPS := 
-XC_DEPS := 
 CPP_DEPS := 
 EXECUTABLES := 
 CXX_DEPS := 

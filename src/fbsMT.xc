@@ -46,34 +46,44 @@ on stdcore[1] : out port out_port2 = XS1_PORT_1B;
 on stdcore[1] : in port ext_sync1 = XS1_PORT_1C;
 on stdcore[1] : in port ext_sync2 = XS1_PORT_1D;
 
+// main thread functions:
+// comm thread
+void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch2, chanend interrupt_ch);
+void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend interrupt_ch, chanend loop_sync, out port out_port);
+void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend loop_sync, out port out_port);
+
+// Time delay functions:
+// Determine the amount of time to wait.  Calls wait function to kill lots of time,
+// then makes a final call to fast_output for the last bit of time.
+void setDelay(unsigned int time, unsigned char units, out port out_port, unsigned char signal, unsigned char endstate);
+// Kills time.  Does not affect outputs.
+void wait(int ticks);
+void delay_remainder(unsigned time, out port out_port, unsigned char signal, unsigned char endstate);
+// Waits very small amounts of time (<320 us).
+// outputs signal at init_time, then endstate at fin_time.
+void fast_output(int init_time, int fin_time, out port out_port, unsigned char signal, unsigned char endstate);
+
+// Communication functions:
 int uart_getc(unsigned timeout);
 unsigned char rxByte(void);
 unsigned int rxInt(void);
 void txByte(unsigned char c);
 void txInt(unsigned int num);
-void output_usec(int time, out port out_port, unsigned char signal, unsigned char endstate);
-void output_nsec(int time, out port out_port, unsigned char signal, unsigned char endstate);
-void setDelay(unsigned int time, unsigned char units, out port out_port, unsigned char signal, unsigned char endstate);
-void getNumSettings(chanend nSetOut);
-void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch2);
-void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend loop_sync, out port out_port);
-void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend loop_sync, out port out_port);
-void wait(int ticks);
 void chipReset( void );
 
+// thread dispatch
 int main(void){
-	chan set_ch1, set_ch2, go_ch1, go_ch2, thread_sync, loop_sync;
+	chan set_ch1, set_ch2, go_ch1, go_ch2, thread_sync, loop_sync, interrupt_ch;
 	par{
-		on stdcore[0]: getSettings(set_ch1, go_ch1, set_ch2, go_ch2);
-		on stdcore[1]: output_master(set_ch1, go_ch1, thread_sync, loop_sync, out_port1);
+		on stdcore[0]: getSettings(set_ch1, go_ch1, set_ch2, go_ch2, interrupt_ch);
+		on stdcore[1]: output_master(set_ch1, go_ch1, thread_sync, interrupt_ch, loop_sync, out_port1);
 		on stdcore[1]: output_worker(set_ch2, go_ch2, thread_sync, loop_sync, out_port2);
 	}
 	return 0;
 }
 
-void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch2){
-	timer tmr;
-	unsigned time;
+// comm thread
+void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch2, chanend interrupt_ch){
 	unsigned char nSettings;
 	// the settings as received from the serial port
 	timeset settings[255];
@@ -86,6 +96,9 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 	int GO=0;
 	int ctr;
 	int is_sync=0;
+	timer tmr;
+	unsigned time;
+	int nSet_out;
 
 	while(1)
 		{
@@ -98,58 +111,69 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 					go_ch2 <: GO;
 					break;
 				}
-				// comm received, incoming data
-				// received data should be 0.  This
-				case rxd when pinsneq(1) :> void:  //
+
+				case go_ch2 :> pDone:
 				{
-					// if any channel is being used to synchronize, then reset the chip when comm is received.
-					// this is done to work around locking up waiting for potentially non-existent sync signal.
+					go_ch1 :> pDone;
+					go_ch2 <: GO;
+					go_ch1 <: GO;
+					break;
+				}
+
+				// comm received, incoming data
+				case rxd when pinsneq(1) :> void:
+				{
+					tmr :> time;
+					// start bit + 1/2 bit offset (read in middle of bit) +
+					//         8 data bits + stop bit
+					time += 10*BIT_TIME+BIT_TIME/2;
+					tmr when timerafter(time) :> void;
+					// if any channel is being used to synchronize, then interrupt any waiting threads
 					if (is_sync==1) {
-						tmr :> time;
-						// start bit + 1/2 bit offset (read in middle of bit) +
-						//         8 data bits + stop bit
-						time += 10*BIT_TIME+BIT_TIME/2;
-						tmr when timerafter(time) :> void;
-						txByte(0);
-						chipReset();
+						interrupt_ch <: STOP;
 					}
-					// wait for process to finish.  This should pretty much always take long enough that
-					// the serial comm sync doesn't create any weird received values on the other end.
+					// wait for process to finish.
 					select
 					{
 						case go_ch1 :> pDone:
-							{
+						{
 							go_ch2 :> pDone;
 							break;
-							}
+						}
 						case go_ch2 :> pDone:
-							{
+						{
 							go_ch1 :> pDone;
 							break;
-							}
+						}
 					}
-
-					// tell process to wait for new input
+					// tell processes to wait for new input
 					go_ch1 <: STOP;
 					go_ch2 <: STOP;
-					wait(5000);
 					// tell computer you're ready for data
 					txByte(255);
 					nSettings=rxByte(); // get number of settings
 					// tell number of settings to process threads
 					// nsettings = 0 means close shutter
 					if (nSettings == 0){
+						// dispatch one setting to either output thread
 						set_ch1 <: (unsigned char)1;
 						set_ch2 <: (unsigned char)1;
+						// tell the primary output to blank
 						set_ch1 <: OFF_SETTING;
+						// the secondary output should stay on
+						// unless explicitly specified to be off.
 						set_ch2 <: ON_SETTING;
 						is_sync=0;
 					}
 					// nsettings = 255 means open shutter
 					else if (nSettings == 255){
+						// dispatch one setting to either output thread
 						set_ch1 <: (unsigned char)1;
 						set_ch2 <: (unsigned char)1;
+						// tell the primary output to blank
 						set_ch1 <: ON_SETTING;
+						// the secondary output should stay on
+						// unless explicitly specified to be off.
 						set_ch2 <: ON_SETTING;
 						is_sync=0;
 					}
@@ -168,13 +192,17 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 						}
 						ctr=0;
 						is_sync=0;
+						nSet_out=nSettings;
 						while (ctr < nSettings) {
+							if ((settings[ctr].sync>0)) {
+								is_sync=1;
+							}
 							if (settings[ctr].output_interleave==1){
 								set_out_1[ctr] = settings[ctr];
 								set_out_2[ctr] = settings[ctr+1];
 								if (set_out_1[ctr].nacqs != set_out_2[ctr].nacqs) chipReset();
 								ctr+=1;
-								nSettings-=1;
+								nSet_out-=1;
 							}
 							else {
 								set_out_1[ctr] = settings[ctr];
@@ -183,13 +211,11 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 								set_out_2[ctr] = settings[ctr];
 								ctr+=1;
 							}
-							if ((settings[ctr].sync>0)) {
-								is_sync=1;
-							}
+
 						}
 						set_ch1 <: nSettings;
 						set_ch2 <: nSettings;
-						for (int i=0; i < nSettings; i+=1) {
+						for (int i=0; i < nSet_out; i+=1) {
 							set_ch1 <: set_out_1[i];
 							set_ch2 <: set_out_2[i];
 						}
@@ -200,57 +226,154 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 		}
 }
 
-void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend loop_sync, out port out_port) {
+void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend interrupt_ch, chanend loop_sync, out port out_port) {
 	unsigned char nSettings=1;
 	timeset settings[255];
-	int stop;
 	int DONE=1;
-	int sync=1;
+	int stop=0;
+	int sync, set_ct, break_loop;
 
 	settings[0]=ON_SETTING;
 
 	while (1) {
-		for (int i = 0; i < nSettings; i+=1) {
-			for (unsigned j = 0; j < settings[i].nacqs; j += 1){
-				// if settings says turn off, turn off for 250 msec, then stay off
-				if (settings[i].onUnits=='x') setDelay(250,'m',out_port,OFF_STATE,OFF_STATE);
-				else if (settings[i].onUnits=='o') setDelay(250,'m',out_port,ON_STATE,ON_STATE);
-				else {
-					// make sure the shutter is off while waiting for sync signal
+		// initialize loop counter and loop stop marker
+		set_ct = break_loop = 0;
+		while ((set_ct<nSettings)&&(!break_loop)) {
+			// onUnits is used to determine whether to just switch beam on or off, or
+			// to process an actual setting.
+			switch (settings[set_ct].onUnits) {
+				case 120: {
+					// case 'x': activate the shutter (turn off beam)
+					setDelay(250,'m',out_port,OFF_STATE,OFF_STATE);
+					// loop through any number of settings, making sure that master
+					// and worker threads are in sync.
+					for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1) loop_sync :> sync;
+					break;
+				}
+				case 111: {
+					// case 'o': deactivate the shutter (turn on beam)
+					setDelay(250,'m',out_port,ON_STATE,ON_STATE);
+					// loop through any number of settings, making sure that master
+					// and worker threads are in sync.
+					for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1) loop_sync :> sync;
+					break;
+				}
+				default: {
+					// Not 'x' or 'o' - we have a real setting here!  Excitement abounds!
+					// make sure the shutter is off while waiting for any sync signal
 					out_port <: OFF_STATE;
 					// camera hardware sync signal
 					// wait until camera signals that it is acquiring
-					if (settings[i].sync==1) {
+					switch (settings[set_ct].sync) {
+					case 1: {
+						select {
 							//waits for sync signal
-							ext_sync1 when pinseq (1) :> void;
-							// outputs sync signal to worker thread
-							thread_sync <: sync;
+							case ext_sync1 when pinseq (1) :> void:
+							{
+								// wait to receive a sync pulse from ext_sync1
+								// outputs sync signal to worker thread
+								// break_loop should be 0, unless set to 1 previously.
+								thread_sync <: break_loop;
+								break;
 							}
-					else if (settings[i].sync==2) {
-						ext_sync2 when pinseq (1) :> void;
-						thread_sync <: sync;
-						}
-
-					setDelay(settings[i].setupTime,settings[i].setupUnits,out_port,OFF_STATE,OFF_STATE);
-					setDelay(settings[i].onTime,settings[i].onUnits,out_port,ON_STATE,OFF_STATE);
-
-					// camera hardware sync signal
-					// wait until camera signals that it is done acquiring.
-					if (settings[i].sync==1) {
-							// waits for sync signal
-							ext_sync1 when pinseq (0) :> void;
-							// outputs sync signal to worker thread
-							thread_sync <: sync;
+							// Any interrupt will set break_loop to 1 here.
+							// That will break the settings loop.
+							case interrupt_ch :> break_loop:
+							{
+								// Tell the worker thread to stop.
+								thread_sync <: break_loop;
+								// go to beginning of settings loop, which should not
+								// enter another iteration now that break_loop is 1.
+								continue;
+								break;
 							}
-					else if (settings[i].sync==2) {
-						ext_sync2 when pinseq (0) :> void;
-						thread_sync <: sync;
 						}
+						break;
+					}
+					case 2: {
+						select {
+							case ext_sync2 when pinseq (1) :> void:
+							{
+								// wait to receive a sync pulse from ext_sync2
+								// outputs sync signal to worker thread
+
+								thread_sync <: break_loop;
+								break;
+							}
+							// Any interrupt will set break_loop to 1 here.
+							// That will break the settings loop.
+							case interrupt_ch :> break_loop:
+							{
+								// Tell the worker thread to stop.
+								thread_sync <: break_loop;
+								// go to beginning of settings loop, which should not
+								// enter another iteration now that break_loop is 1.
+								continue;
+								break;
+							}
+						}
+						break;
+					}
+					default:
+						break;
 				}
-				// Wait until worker thread is done with this loop
-				loop_sync :> sync;
+				for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1){
+					setDelay(settings[set_ct].setupTime,settings[set_ct].setupUnits,out_port,OFF_STATE,OFF_STATE);
+					setDelay(settings[set_ct].onTime,settings[set_ct].onUnits,out_port,ON_STATE,OFF_STATE);
+					// Wait until worker thread is done with this loop
+					loop_sync :> sync;
+				}
+				// camera hardware sync signal
+				// wait until camera signals that it is done acquiring.
+				switch (settings[set_ct].sync) {
+					case 1: {
+						select {
+						//waits for sync signal
+						case ext_sync1 when pinseq (0) :> void:
+						{
+							// outputs sync signal to worker thread
+							// break_loop should be 0, unless set to 1 previously.
+							thread_sync <: break_loop;
+							break;
+						}
+						case interrupt_ch :> break_loop:
+						{
+							thread_sync <: break_loop;
+							continue;
+							break;
+						}
+						}
+						break;
+					}
+					case 2: {
+						select {
+							//waits for sync signal
+							case ext_sync2 when pinseq (0) :> void:
+							{
+								// outputs sync signal to worker thread
+								thread_sync <: break_loop;
+								break;
+							}
+							case interrupt_ch :> break_loop:
+							{
+								thread_sync <: break_loop;
+								continue;
+								break;
+							}
+						}
+						break;
+					}
+					default:
+						// no sync
+						break;
+					}
+					break;
+				} // end default case (process settings aside from on/off)
 			}
+			// loop to next setting
+			set_ct+=1;
 		}
+
 		// tell comm thread you're done
 		go_ch <: DONE;
 		// ask comm thread whether or not to go again.
@@ -259,8 +382,10 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 			// read the number of settings from getSettings
 			set_ch :> nSettings;
 			for (int i = 0; i < nSettings; i+=1) {
+				// read each setting into thread-local settings buffer
 				set_ch :> settings[i];
 			}
+			//wait(20);
 		}
 	}
 }
@@ -275,30 +400,72 @@ void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 	settings[0]=ON_SETTING;
 
 	while (1) {
-		for (int i = 0; i < nSettings; i+=1) {
-			for (unsigned j = 0; j < settings[i].nacqs; j += 1){
-				// camera hardware sync signal
-				// wait until camera signals that it is acquiring
+		int i=0;
+		int break_loop=0;
+		while ((i<nSettings)&&(!break_loop)) {
+			switch (settings[i].onUnits) {
+			case 120:
+				out_port <: OFF_STATE;
 				if (settings[i].sync>0) {
-					out_port <: ON_STATE;
-					thread_sync :> sync;
+					// wait until master thread sends sync signal
+					// sync signal also indicates whether master has been interrupted.
+					thread_sync :> break_loop;
+					// if master thread has been interrupted, break the settings loop.
+					if (break_loop) continue;
 				}
-				if (settings[i].onUnits=='x') out_port <: OFF_STATE;
-				else if (settings[i].onUnits=='o') out_port <: ON_STATE;
-				else {
-					// make sure the shutter is off while waiting for sync signal
-
+				for (unsigned j = 0; j < settings[i].nacqs; j += 1) loop_sync <: sync;
+				if (settings[i].sync>0) {
+					// wait until master thread sends sync signal
+					// sync signal also indicates whether master has been interrupted.
+					thread_sync :> break_loop;
+					// if master thread has been interrupted, break the settings loop.
+					if (break_loop) continue;
+				}
+				break;
+			case 111:
+				out_port <: ON_STATE;
+				if (settings[i].sync>0) {
+					// wait until master thread sends sync signal
+					// sync signal also indicates whether master has been interrupted.
+					thread_sync :> break_loop;
+					// if master thread has been interrupted, break the settings loop.
+					if (break_loop) continue;
+				}
+				for (unsigned j = 0; j < settings[i].nacqs; j += 1) loop_sync <: sync;
+				if (settings[i].sync>0) {
+					// wait until master thread sends sync signal
+					// sync signal also indicates whether master has been interrupted.
+					thread_sync :> break_loop;
+					// if master thread has been interrupted, break the settings loop.
+					if (break_loop) continue;
+				}
+				break;
+			default:
+				if (settings[i].sync>0) {
+					// wait until master thread sends sync signal.
+					// sync signal also indicates whether master has been interrupted.
+					thread_sync :> break_loop;
+					// if master thread has been interrupted, break the settings loop.
+					if (break_loop) continue;
+				}
+				for (unsigned j = 0; j < settings[i].nacqs; j += 1){
+					// set output times & execute port activation/deactivation
 					setDelay(settings[i].setupTime,settings[i].setupUnits,out_port,OFF_STATE,OFF_STATE);
 					setDelay(settings[i].onTime,settings[i].onUnits,out_port,ON_STATE,OFF_STATE);
-
+					// tell master thread you're done with this loop
+					loop_sync <: sync;
 				}
-				// camera hardware sync signal
-				// wait until camera signals that it is done acquiring.
-				if (settings[i].sync>0) thread_sync :> sync;
-				// tell master thread you're done with this loop
-				loop_sync <: sync;
+				if (settings[i].sync>0) {
+					// wait until master thread sends sync signal
+					thread_sync :> break_loop;
+					// if master thread has been interrupted, break the settings loop.
+					if (break_loop) continue;
+				}
+				break;
 			}
+			i++;
 		}
+
 		// tell comm thread you're done
 		go_ch <: DONE;
 		// ask comm thread whether or not to go again.
@@ -307,67 +474,104 @@ void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 			// read the number of settings from getSettings
 			set_ch :> nSettings;
 			for (int i = 0; i < nSettings; i+=1) {
+				// read each setting into thread-local settings buffer
 				set_ch :> settings[i];
 			}
+			//wait(20);
 		}
 	}
 }
 
 void setDelay(unsigned int time, unsigned char units, out port out_port, unsigned char signal, unsigned char endstate){
 	unsigned int carry=0;
+	unsigned ticks;
+	int init_time, fin_time;
 	switch(units){
-		case 77: //minutes, captial M
-			carry=time*60000000/320;
-			out_port <: signal;
-			for (int cnt = 0; cnt < carry; cnt += 1){
-					wait(32000);
-				}
-			output_usec(time*60000000%320, out_port, signal, endstate);
-			break;
-		case 115: //seconds, lower-case s
-			carry=time*1000000/320;
-			out_port <: signal;
-			for (int cnt = 0; cnt < carry; cnt += 1){
-				wait(32000);
-				}
-			output_usec(time*1000000%1280, out_port, signal, endstate);
-			break;
-		case 109: //milliseconds, lower-case m
-			carry=time*1000/320;
-			out_port <: signal;
-			for (int cnt = 0; cnt < carry; cnt += 1){
-					wait(32000);
-					}
-			output_usec(time*1000%320, out_port, signal, endstate);
-			break;
 		case 117: //microseconds, lower-case u
-			carry=time/320;
-			if (carry>0) {
-				out_port <: signal;
-				for (int cnt = 0; cnt < carry; cnt += 1){
-					wait(32000);
-					}
+		{
+			if (time < 5) {
+				time=time*100;
+				out_port <: OFF_STATE @ init_time;
+				init_time+=20;
+				fin_time=init_time+time;
+				fast_output(init_time, fin_time, out_port, signal, endstate);
 			}
-			output_usec(time%320, out_port, signal, endstate);
+			else {
+				ticks=time*100;
+				out_port <: signal;
+				wait(ticks);
+				out_port <: endstate;
+			}
 			break;
+		}
 		case 110: //nanoseconds, lower-case n
+		{
 			// time / 10 is because there are 10 ns per clock tick.
 			// division done here to allow faster switching in the actual function.
 			time=time/10;
-			carry=time/32000;
-			if (carry>0) {
-				out_port <: signal;
-				for (int cnt = 0; cnt < carry; cnt += 1){
-					wait(32000);
-					}
+			out_port <: OFF_STATE @ init_time;
+			init_time+=20;
+			fin_time=init_time+time;
+			fast_output(init_time, fin_time, out_port, signal, endstate);
+			break;
+		}
+		case 109: //milliseconds, lower-case m
+		{
+			ticks=time*100000;
+			out_port <: signal;
+			wait(ticks);
+			out_port <: endstate;
+			break;
+		}
+		case 115: //seconds, lower-case s
+		{
+			// if time is longer than 30 seconds, the counter is in danger of overflow.
+			// to avoid this, divide by 30, and wait in multiples of 30 seconds, then
+			// finally wait for the remainder time.
+			if (time>30) {
+				carry=time/30;
 			}
 
-			output_nsec(time%32000, out_port, signal, endstate);
+			out_port <: signal;
+			for (int cnt = 0; cnt < carry; cnt += 1){
+				// wait 30 sec
+				wait(3000000000);
+				}
+			// wait remainder seconds
+			wait(time*100000000%30);
+			// output end state
+			out_port <: endstate;
 			break;
+		}
+		case 77: //minutes, captial M
+		{
+			// wait in multiples of 30 seconds (two intervals per minute)
+			carry=time*2;
+			out_port <: signal;
+			for (int cnt = 0; cnt < carry; cnt += 1){
+				// wait 30 sec
+				wait(3000000000);
+				}
+			out_port <: endstate;
+			break;
+		}
+
 		default:
+		{
 			chipReset();
 			break;
+		}
 	}
+}
+
+
+void delay_remainder(unsigned time, out port out_port, unsigned char signal, unsigned char endstate)
+{
+	int init_time, fin_time;
+	out_port <: OFF_STATE @ init_time;
+	init_time+=50;
+	fin_time=init_time+time;
+	fast_output(init_time, fin_time, out_port, signal, endstate);
 }
 
 void chipReset(void)
@@ -378,20 +582,7 @@ void chipReset(void)
   write_sswitch_reg(get_core_id(), 6, x);
 }
 
-void output_usec(int time, out port out_port, unsigned char signal, unsigned char endstate)
-{
-	// more precise function for killing time.  Should be accurate to 1 us.
-	int portTime;
-	out_port <: signal @ portTime;
-	// time * 100 is because there are 100 clock ticks per us.
-	portTime += time*100;
-	/* this @ portTime is only a 16 bit counter, it will wrap at 65536 (at best)
-	* To be safe, I have made it assume that it only has 15 bits, and that no
-	* number passed to is ever allowed to be greater than 32000.  */
-	out_port @ portTime <: endstate;  // Turn port to endstate after time has elapsed
-}
-
-void output_nsec(int time, out port out_port, unsigned char signal, unsigned char endstate)
+void fast_output(int init_time, int fin_time, out port out_port, unsigned char signal, unsigned char endstate)
 {
 	/* The extreme function for killing time.  The absolute minimum is 180 ns
 	 * (from outputting the signal at first and reading the current portTime,
@@ -399,23 +590,18 @@ void output_nsec(int time, out port out_port, unsigned char signal, unsigned cha
 	 * portTime takes 18 clock cycles (10 ns per cycle).  Only a faster XS1 would
 	 * allow you to get better time.
 	 */
-	int portTime;
-	out_port <: signal @ portTime;
-	portTime += time;
-	/* this @ portTime counter should never wrap - if you want several thousand ns,
-	 * why aren't you using the output_usec function instead?
-	 */
-	out_port @ portTime <: endstate;  // Turn port to endstate after time has elapsed
+	out_port @ init_time <: signal;
+	out_port @ fin_time <: endstate;  // Turn port to endstate after time has elapsed
 }
 
 
 void wait(int ticks){
-	// generic, less precise function to kill time.  better for longer periods of time, though.
-	timer tmr;
-	unsigned int time;
-	tmr :> time;
+	// generic, less precise function to kill time.  better for longer periods of time, though because it uses a 32-bit counter.
+	timer wait_tmr;
+	int time;
+	wait_tmr :> time;
 	time += ticks;
-	tmr when timerafter ( time ) :> void ;
+	wait_tmr when timerafter ( time ) :> void ;
 }
 
 // UART receive function with timeout borrowed from open1541 project.
