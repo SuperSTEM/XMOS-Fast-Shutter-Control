@@ -22,6 +22,9 @@ endif
 ifneq ($(strip $(CC_DEPS)),)
 -include $(CC_DEPS)
 endif
+ifneq ($(strip $(XC_DEPS)),)
+-include $(XC_DEPS)
+endif
 ifneq ($(strip $(CPP_DEPS)),)
 -include $(CPP_DEPS)
 endif
@@ -44,13 +47,13 @@ all: FBS.xe
 FBS.xe: $(OBJS) $(XN_SRCS) $(XTA_SRCS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: Mapper/Linker'
-	xcc -Werror=timing-syntax -o "FBS.xe" $(OBJS) $(LIBS) $(XN_SRCS) $(XTA_SRCS)
+	xcc -Werror=timing-syntax -o FBS.xe $(OBJS) $(LIBS) $(XN_SRCS) $(XTA_SRCS)
 	@echo 'Finished building target: $@'
 	@echo ' '
 
 # Other Targets
 clean:
-	-$(call RM, $(C++_DEPS)$(OBJS)$(C_DEPS)$(CC_DEPS)$(CPP_DEPS)$(EXECUTABLES)$(CXX_DEPS)$(C_UPPER_DEPS) FBS.xe)
+	-$(call RM, $(C++_DEPS)$(OBJS)$(C_DEPS)$(CC_DEPS)$(XC_DEPS)$(CPP_DEPS)$(EXECUTABLES)$(CXX_DEPS)$(C_UPPER_DEPS) FBS.xe)
 	-@echo ' '
 
 .PHONY: all clean dependents

@@ -40,6 +40,7 @@
 <inputType id="com.xmos.cdt.c.compiler.input.2085325171" superClass="com.xmos.cdt.c.compiler.input"/>
 <inputType id="com.xmos.cdt.c.compilerXNInput.323536238" name="XN File"/>
 <inputType id="com.xmos.cdt.c.compilerXNInput.1452588564" name="XN File"/>
+<inputType id="com.xmos.cdt.c.compilerXNInput.980003148" name="XN File" superClass="com.xmos.cdt.c.compilerXNInput"/>
 </tool>
 <tool id="com.xmos.cdt.cpp.compiler.debug.354310283" name="C++ Compiler" superClass="com.xmos.cdt.cpp.compiler.debug">
 <option id="gnu.cpp.compiler.option.optimization.level.1323216972" name="Optimization Level" superClass="gnu.cpp.compiler.option.optimization.level" value="gnu.cpp.compiler.optimization.level.none" valueType="enumerated"/>
@@ -54,8 +55,8 @@
 </toolChain>
 </folderInfo>
 <sourceEntries>
-<entry excluding="src/fbsMT_1.1.xc|backup|src/fbs.xc" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 <entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="backup"/>
+<entry excluding="src/fbsMT_1.2.1.xc|src/fbsMT_1.2.xc|src/fbsMT_1.1.xc|backup|src/fbs.xc" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 </sourceEntries>
 </configuration>
 </storageModule>
@@ -1043,8 +1044,8 @@
 </toolChain>
 </folderInfo>
 <sourceEntries>
-<entry excluding="src/fbsMT_1.1.xc|backup|src/fbs.xc" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 <entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="backup"/>
+<entry excluding="src/fbsMT_1.2.1.xc|src/fbsMT_1.2.xc|src/fbsMT_1.1.xc|backup|src/fbs.xc" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 </sourceEntries>
 </configuration>
 </storageModule>
@@ -2032,8 +2033,8 @@
 </toolChain>
 </folderInfo>
 <sourceEntries>
-<entry excluding="src/fbsMT.xc|backup|src/fbs.xc" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 <entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="backup"/>
+<entry excluding="src/fbsMT_1.2.1.xc|src/fbsMT_1.2.xc|src/fbsMT.xc|backup|src/fbs.xc" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 </sourceEntries>
 </configuration>
 </storageModule>
@@ -3021,8 +3022,8 @@
 </toolChain>
 </folderInfo>
 <sourceEntries>
-<entry excluding="src/fbsMT.xc|backup|src/fbs.xc" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 <entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="backup"/>
+<entry excluding="src/fbsMT_1.2.1.xc|src/fbsMT_1.2.xc|src/fbsMT.xc|backup|src/fbs.xc" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name=""/>
 </sourceEntries>
 </configuration>
 </storageModule>

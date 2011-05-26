@@ -55,13 +55,12 @@ void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 // Time delay functions:
 // Determine the amount of time to wait.  Calls wait function to kill lots of time,
 // then makes a final call to fast_output for the last bit of time.
-void setDelay(unsigned int time, unsigned char units, out port out_port, unsigned char signal, unsigned char endstate);
+void setDelay(int time, unsigned char units, out port out_port, unsigned char signal, unsigned char endstate);
 // Kills time.  Does not affect outputs.
 void wait(int ticks);
-void delay_remainder(unsigned time, out port out_port, unsigned char signal, unsigned char endstate);
 // Waits very small amounts of time (<320 us).
 // outputs signal at init_time, then endstate at fin_time.
-void fast_output(int init_time, int fin_time, out port out_port, unsigned char signal, unsigned char endstate);
+void fast_output(short init_time, short fin_time, out port out_port, unsigned char signal, unsigned char endstate);
 
 // Communication functions:
 int uart_getc(unsigned timeout);
@@ -75,7 +74,9 @@ void chipReset( void );
 int main(void){
 	chan set_ch1, set_ch2, go_ch1, go_ch2, thread_sync, loop_sync, interrupt_ch;
 	par{
+		// getSettings runs on stdcore[0] because the UART ports are on that core.
 		on stdcore[0]: getSettings(set_ch1, go_ch1, set_ch2, go_ch2, interrupt_ch);
+		// these two functions are on stdcore[1] because their ports are wired to that core.
 		on stdcore[1]: output_master(set_ch1, go_ch1, thread_sync, interrupt_ch, loop_sync, out_port1);
 		on stdcore[1]: output_worker(set_ch2, go_ch2, thread_sync, loop_sync, out_port2);
 	}
@@ -385,7 +386,6 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 				// read each setting into thread-local settings buffer
 				set_ch :> settings[i];
 			}
-			//wait(20);
 		}
 	}
 }
@@ -409,43 +409,34 @@ void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 				if (settings[i].sync>0) {
 					// wait until master thread sends sync signal
 					// sync signal also indicates whether master has been interrupted.
+					// if it has been, break_loop will be obtained as 1 here.
 					thread_sync :> break_loop;
 					// if master thread has been interrupted, break the settings loop.
+					// the continue will return to the while condition check, which
+					// will now be false.
 					if (break_loop) continue;
 				}
 				for (unsigned j = 0; j < settings[i].nacqs; j += 1) loop_sync <: sync;
 				if (settings[i].sync>0) {
-					// wait until master thread sends sync signal
-					// sync signal also indicates whether master has been interrupted.
 					thread_sync :> break_loop;
-					// if master thread has been interrupted, break the settings loop.
 					if (break_loop) continue;
 				}
 				break;
 			case 111:
 				out_port <: ON_STATE;
 				if (settings[i].sync>0) {
-					// wait until master thread sends sync signal
-					// sync signal also indicates whether master has been interrupted.
 					thread_sync :> break_loop;
-					// if master thread has been interrupted, break the settings loop.
 					if (break_loop) continue;
 				}
 				for (unsigned j = 0; j < settings[i].nacqs; j += 1) loop_sync <: sync;
 				if (settings[i].sync>0) {
-					// wait until master thread sends sync signal
-					// sync signal also indicates whether master has been interrupted.
 					thread_sync :> break_loop;
-					// if master thread has been interrupted, break the settings loop.
 					if (break_loop) continue;
 				}
 				break;
 			default:
 				if (settings[i].sync>0) {
-					// wait until master thread sends sync signal.
-					// sync signal also indicates whether master has been interrupted.
 					thread_sync :> break_loop;
-					// if master thread has been interrupted, break the settings loop.
 					if (break_loop) continue;
 				}
 				for (unsigned j = 0; j < settings[i].nacqs; j += 1){
@@ -456,9 +447,7 @@ void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 					loop_sync <: sync;
 				}
 				if (settings[i].sync>0) {
-					// wait until master thread sends sync signal
 					thread_sync :> break_loop;
-					// if master thread has been interrupted, break the settings loop.
 					if (break_loop) continue;
 				}
 				break;
@@ -477,19 +466,21 @@ void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend l
 				// read each setting into thread-local settings buffer
 				set_ch :> settings[i];
 			}
-			//wait(20);
 		}
 	}
 }
 
-void setDelay(unsigned int time, unsigned char units, out port out_port, unsigned char signal, unsigned char endstate){
-	unsigned int carry=0;
-	unsigned ticks;
-	int init_time, fin_time;
+void setDelay(int time, unsigned char units, out port out_port, unsigned char signal, unsigned char endstate){
+	int carry=0;
+	int ticks;
+	// these two are used for the fast_output function.  Because it uses port timers, these must be 16-bit ints (short).
+	short init_time, fin_time;
 	switch(units){
 		case 117: //microseconds, lower-case u
 		{
 			if (time < 5) {
+				// for very short delays, use the more precise fast_output function
+				// 100 clock cycles per microsecond
 				time=time*100;
 				out_port <: OFF_STATE @ init_time;
 				init_time+=20;
@@ -497,6 +488,7 @@ void setDelay(unsigned int time, unsigned char units, out port out_port, unsigne
 				fast_output(init_time, fin_time, out_port, signal, endstate);
 			}
 			else {
+				// 100 clock cycles per microsecond
 				ticks=time*100;
 				out_port <: signal;
 				wait(ticks);
@@ -509,7 +501,9 @@ void setDelay(unsigned int time, unsigned char units, out port out_port, unsigne
 			// time / 10 is because there are 10 ns per clock tick.
 			// division done here to allow faster switching in the actual function.
 			time=time/10;
+			// read out current port timer by timestamped output.
 			out_port <: OFF_STATE @ init_time;
+			// short additional delay to start time to allow for processing time
 			init_time+=20;
 			fin_time=init_time+time;
 			fast_output(init_time, fin_time, out_port, signal, endstate);
@@ -528,29 +522,29 @@ void setDelay(unsigned int time, unsigned char units, out port out_port, unsigne
 			// if time is longer than 30 seconds, the counter is in danger of overflow.
 			// to avoid this, divide by 30, and wait in multiples of 30 seconds, then
 			// finally wait for the remainder time.
-			if (time>30) {
-				carry=time/30;
+			if (time>20) {
+				carry=time/20;
 			}
 
 			out_port <: signal;
 			for (int cnt = 0; cnt < carry; cnt += 1){
-				// wait 30 sec
-				wait(3000000000);
+				// wait 20 sec
+				wait(2000000000);
 				}
 			// wait remainder seconds
-			wait(time*100000000%30);
+			wait(time*100000000%20);
 			// output end state
 			out_port <: endstate;
 			break;
 		}
 		case 77: //minutes, captial M
 		{
-			// wait in multiples of 30 seconds (two intervals per minute)
-			carry=time*2;
+			// wait in multiples of 20 seconds (three intervals per minute)
+			carry=time*3;
 			out_port <: signal;
 			for (int cnt = 0; cnt < carry; cnt += 1){
-				// wait 30 sec
-				wait(3000000000);
+				// wait 20 sec
+				wait(2000000000);
 				}
 			out_port <: endstate;
 			break;
@@ -564,16 +558,6 @@ void setDelay(unsigned int time, unsigned char units, out port out_port, unsigne
 	}
 }
 
-
-void delay_remainder(unsigned time, out port out_port, unsigned char signal, unsigned char endstate)
-{
-	int init_time, fin_time;
-	out_port <: OFF_STATE @ init_time;
-	init_time+=50;
-	fin_time=init_time+time;
-	fast_output(init_time, fin_time, out_port, signal, endstate);
-}
-
 void chipReset(void)
 {
   unsigned x;
@@ -582,7 +566,7 @@ void chipReset(void)
   write_sswitch_reg(get_core_id(), 6, x);
 }
 
-void fast_output(int init_time, int fin_time, out port out_port, unsigned char signal, unsigned char endstate)
+void fast_output(short init_time, short fin_time, out port out_port, unsigned char signal, unsigned char endstate)
 {
 	/* The extreme function for killing time.  The absolute minimum is 180 ns
 	 * (from outputting the signal at first and reading the current portTime,
