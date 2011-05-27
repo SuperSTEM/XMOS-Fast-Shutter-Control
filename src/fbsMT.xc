@@ -41,10 +41,11 @@ timeset OFF_SETTING={1,1,'x',1,'x',(char)0,(char)0};
 
 in port rxd = PORT_UART_RX;
 out port txd = PORT_UART_TX;
-on stdcore[1] : out port out_port1 = XS1_PORT_1A;
-on stdcore[1] : out port out_port2 = XS1_PORT_1B;
-on stdcore[1] : in port ext_sync1 = XS1_PORT_1C;
-on stdcore[1] : in port ext_sync2 = XS1_PORT_1D;
+on stdcore[1] : out port out_port1 = XS1_PORT_1B;
+on stdcore[1] : out port out_port2 = XS1_PORT_1A;
+on stdcore[1] : out port clock_out = XS1_PORT_1D;
+on stdcore[1] : in port ext_sync = XS1_PORT_1C;
+
 
 // main thread functions:
 // comm thread
@@ -53,8 +54,8 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend loop_sync, out port out_port);
 
 // Time delay functions:
-// Determine the amount of time to wait.  Calls wait function to kill lots of time,
-// then makes a final call to fast_output for the last bit of time.
+// Determine the amount of time to wait.  Depending on amount of time to wait,
+// calls either wait function to kill lots of time or fast_output for small amounts.
 void setDelay(int time, unsigned char units, out port out_port, unsigned char signal, unsigned char endstate);
 // Kills time.  Does not affect outputs.
 void wait(int ticks);
@@ -269,7 +270,7 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 					case 1: {
 						select {
 							//waits for sync signal
-							case ext_sync1 when pinseq (1) :> void:
+							case ext_sync when pinseq (1) :> void:
 							{
 								// wait to receive a sync pulse from ext_sync1
 								// outputs sync signal to worker thread
@@ -291,38 +292,18 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 						}
 						break;
 					}
-					case 2: {
-						select {
-							case ext_sync2 when pinseq (1) :> void:
-							{
-								// wait to receive a sync pulse from ext_sync2
-								// outputs sync signal to worker thread
-
-								thread_sync <: break_loop;
-								break;
-							}
-							// Any interrupt will set break_loop to 1 here.
-							// That will break the settings loop.
-							case interrupt_ch :> break_loop:
-							{
-								// Tell the worker thread to stop.
-								thread_sync <: break_loop;
-								// go to beginning of settings loop, which should not
-								// enter another iteration now that break_loop is 1.
-								continue;
-								break;
-							}
-						}
-						break;
-					}
 					default:
 						break;
 				}
 				for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1){
+					// output clock signal - advance 1 pixel
+					clock_out <: 1;
 					setDelay(settings[set_ct].setupTime,settings[set_ct].setupUnits,out_port,OFF_STATE,OFF_STATE);
 					setDelay(settings[set_ct].onTime,settings[set_ct].onUnits,out_port,ON_STATE,OFF_STATE);
 					// Wait until worker thread is done with this loop
 					loop_sync :> sync;
+					// reset clock signal
+					clock_out <: 0;
 				}
 				// camera hardware sync signal
 				// wait until camera signals that it is done acquiring.
@@ -330,7 +311,7 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 					case 1: {
 						select {
 						//waits for sync signal
-						case ext_sync1 when pinseq (0) :> void:
+						case ext_sync when pinseq (0) :> void:
 						{
 							// outputs sync signal to worker thread
 							// break_loop should be 0, unless set to 1 previously.
@@ -343,24 +324,6 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 							continue;
 							break;
 						}
-						}
-						break;
-					}
-					case 2: {
-						select {
-							//waits for sync signal
-							case ext_sync2 when pinseq (0) :> void:
-							{
-								// outputs sync signal to worker thread
-								thread_sync <: break_loop;
-								break;
-							}
-							case interrupt_ch :> break_loop:
-							{
-								thread_sync <: break_loop;
-								continue;
-								break;
-							}
 						}
 						break;
 					}
