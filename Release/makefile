@@ -10,6 +10,7 @@ RM = del /q $(subst /,\,$(1))
 -include sources.mk
 -include subdir.mk
 -include src/subdir.mk
+-include SerialPlugin/subdir.mk
 -include objects.mk
 
 ifneq ($(MAKECMDGOALS),clean)

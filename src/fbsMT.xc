@@ -18,13 +18,13 @@
 #define BIT_TIME XS1_TIMER_HZ / BIT_RATE
 
 
-// If a positive output turns the beam off (closes the shutter)
-#define ON_STATE 0
-#define OFF_STATE 1
+// If a positive output turns the beam off (closes the shutter) (SuperSTEM1/Normal)
+//#define ON_STATE 0
+//#define OFF_STATE 1
 
-/* If a positive output turns the beam on (opens the shutter) */
-//#define ON_STATE 1
-//#define OFF_STATE 0
+/* If a positive output turns the beam on (opens the shutter) (SuperSTEM2) */
+#define ON_STATE 1
+#define OFF_STATE 0
 
 typedef struct {
 	unsigned int nacqs ;
@@ -246,7 +246,7 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 			switch (settings[set_ct].onUnits) {
 				case 120: {
 					// case 'x': activate the shutter (turn off beam)
-					setDelay(250,'m',out_port,OFF_STATE,OFF_STATE);
+					setDelay(20,'u',out_port,OFF_STATE,OFF_STATE);
 					// loop through any number of settings, making sure that master
 					// and worker threads are in sync.
 					for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1) loop_sync :> sync;
@@ -254,7 +254,7 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 				}
 				case 111: {
 					// case 'o': deactivate the shutter (turn on beam)
-					setDelay(250,'m',out_port,ON_STATE,ON_STATE);
+					setDelay(20,'u',out_port,ON_STATE,ON_STATE);
 					// loop through any number of settings, making sure that master
 					// and worker threads are in sync.
 					for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1) loop_sync :> sync;
