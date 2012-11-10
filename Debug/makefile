@@ -44,10 +44,10 @@ endif
 all: FBS.xe
 
 # Tool invocations
-FBS.xe: $(OBJS) $(XN_SRCS) $(XTA_SRCS)
+FBS.xe: $(OBJS) $(XTA_SRCS)
 	@echo 'Building target: $@'
 	@echo 'Invoking: Mapper/Linker'
-	xcc -Werror=timing-syntax -o FBS.xe $(OBJS) $(LIBS) $(XN_SRCS) $(XTA_SRCS)
+	xcc -target=XC-1A -Werror=timing-syntax -o FBS.xe $(OBJS) $(LIBS) $(XTA_SRCS)
 	@echo 'Finished building target: $@'
 	@echo ' '
 

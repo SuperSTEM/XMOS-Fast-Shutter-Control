@@ -474,6 +474,7 @@ void setDelay(int time, unsigned char units, out port out_port, unsigned char si
 		}
 		case 109: //milliseconds, lower-case m
 		{
+			// 1E5 cycles/msec
 			ticks=time*100000;
 			out_port <: signal;
 			wait(ticks);
@@ -482,32 +483,35 @@ void setDelay(int time, unsigned char units, out port out_port, unsigned char si
 		}
 		case 115: //seconds, lower-case s
 		{
-			// if time is longer than 30 seconds, the counter is in danger of overflow.
-			// to avoid this, divide by 30, and wait in multiples of 30 seconds, then
+			// if time is longer than 2 seconds, the counter is in danger of overflow.
+			// to avoid this, divide by 2 and wait in multiples of 2 seconds, then
 			// finally wait for the remainder time.
-			if (time>20) {
-				carry=time/20;
+			if (time>2) {
+				carry=time/2;
 			}
 
 			out_port <: signal;
-			for (int cnt = 0; cnt < carry; cnt += 1){
-				// wait 20 sec
-				wait(2000000000);
+			ticks = 2*100*1000*1000;
+			for (int cnt = 0; cnt < carry; cnt++){
+				// wait 2 sec
+				// 1E8 cycles/sec
+				wait(ticks);
 				}
 			// wait remainder seconds
-			wait(time*100000000%20);
+			ticks = (time%2)*100*1000*1000;
+			wait(ticks);
 			// output end state
 			out_port <: endstate;
 			break;
 		}
 		case 77: //minutes, captial M
 		{
-			// wait in multiples of 20 seconds (three intervals per minute)
-			carry=time*3;
+			// wait in multiples of 2 seconds (three intervals per minute)
+			carry=time*30;
 			out_port <: signal;
 			for (int cnt = 0; cnt < carry; cnt += 1){
-				// wait 20 sec
-				wait(2000000000);
+				// wait 2 sec
+				wait(2*100*1000*1000);
 				}
 			out_port <: endstate;
 			break;

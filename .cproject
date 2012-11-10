@@ -22,6 +22,7 @@
 <builder buildPath="${workspace_loc:/FBS/Debug}" id="com.xmos.cdt.builder.debug.1523134849" keepEnvironmentInBuildfile="false" managedBuildOn="true" name="Gnu Make Builder" superClass="com.xmos.cdt.builder.debug"/>
 <tool id="com.xmos.cdt.archiver.base.1314904928" name="Archiver" superClass="com.xmos.cdt.archiver.base"/>
 <tool id="com.xmos.cdt.linker.debug.1195325352" name="Mapper/Linker" superClass="com.xmos.cdt.linker.debug">
+<option id="com.xmos.cdt.linker.options.target.88364695" superClass="com.xmos.cdt.linker.options.target" value="com.xmos.cdt.linker.options.target.XC-1A" valueType="enumerated"/>
 <inputType id="com.xmos.cdt.linker.input.447046198" superClass="com.xmos.cdt.linker.input">
 <additionalInput kind="additionalinput" paths="$(LIBS)"/>
 </inputType>
@@ -993,6 +994,7 @@
 </profile>
 </scannerConfigBuildInfo>
 </storageModule>
+<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 </cconfiguration>
 <cconfiguration id="com.xmos.cdt.xeproject.release.289809098">
 <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.xmos.cdt.xeproject.release.289809098" moduleId="org.eclipse.cdt.core.settings" name="Release">
@@ -1013,6 +1015,7 @@
 <builder buildPath="${workspace_loc:/FBS/Release}" id="com.xmos.cdt.builder.release.815212787" keepEnvironmentInBuildfile="false" managedBuildOn="true" name="Gnu Make Builder" superClass="com.xmos.cdt.builder.release"/>
 <tool id="com.xmos.cdt.archiver.base.1541204834" name="Archiver" superClass="com.xmos.cdt.archiver.base"/>
 <tool id="com.xmos.cdt.linker.release.327851151" name="Mapper/Linker" superClass="com.xmos.cdt.linker.release">
+<option id="com.xmos.cdt.linker.options.target.1321950921" name="Target" superClass="com.xmos.cdt.linker.options.target" value="com.xmos.cdt.linker.options.target.XC-1A" valueType="enumerated"/>
 <inputType id="com.xmos.cdt.linker.input.1418655161" superClass="com.xmos.cdt.linker.input">
 <additionalInput kind="additionalinput" paths="$(LIBS)"/>
 </inputType>
@@ -1982,6 +1985,7 @@
 </profile>
 </scannerConfigBuildInfo>
 </storageModule>
+<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 </cconfiguration>
 <cconfiguration id="com.xmos.cdt.xeproject.debug.1567289560.2145781974">
 <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.xmos.cdt.xeproject.debug.1567289560.2145781974" moduleId="org.eclipse.cdt.core.settings" name="1.1_debug">
@@ -2971,6 +2975,7 @@
 </profile>
 </scannerConfigBuildInfo>
 </storageModule>
+<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 </cconfiguration>
 <cconfiguration id="com.xmos.cdt.xeproject.release.289809098.1286400171">
 <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.xmos.cdt.xeproject.release.289809098.1286400171" moduleId="org.eclipse.cdt.core.settings" name="1.1_release">
@@ -3960,6 +3965,7 @@
 </profile>
 </scannerConfigBuildInfo>
 </storageModule>
+<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 </cconfiguration>
 <cconfiguration id="com.xmos.cdt.xeproject.release.289809098.1286400171.15093232">
 <storageModule buildSystemId="org.eclipse.cdt.managedbuilder.core.configurationDataProvider" id="com.xmos.cdt.xeproject.release.289809098.1286400171.15093232" moduleId="org.eclipse.cdt.core.settings" name="1.2_release">
@@ -4949,6 +4955,7 @@
 </profile>
 </scannerConfigBuildInfo>
 </storageModule>
+<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
 </cconfiguration>
 </storageModule>
 <storageModule moduleId="cdtBuildSystem" version="4.0.0">
