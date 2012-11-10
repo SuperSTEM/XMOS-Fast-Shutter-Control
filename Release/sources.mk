@@ -11,7 +11,6 @@ S_SRCS :=
 XC_SRCS := 
 XTA_SRCS := 
 CXX_SRCS := 
-XN_SRCS := 
 C++_SRCS := 
 CC_SRCS := 
 C++_DEPS := 
@@ -27,6 +26,4 @@ C_UPPER_DEPS :=
 # Every subdirectory with source files must be described here
 SUBDIRS := \
 src \
-. \
-SerialPlugin \
 

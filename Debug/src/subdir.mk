@@ -17,7 +17,7 @@ XC_DEPS += \
 src/%.o: ../src/%.xc
 	@echo 'Building file: $<'
 	@echo 'Invoking: XC Compiler'
-	xcc -O0 -g -Wall -c -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d) $@ " -o $@ "$<" "../XC-1A.xn"
+	xcc -O0 -g -Wall -c -MMD -MP -MF"$(@:%.o=%.d)" -MT"$(@:%.o=%.d) $@ " -target=XC-1A -o $@ "$<"
 	@echo 'Finished building: $<'
 	@echo ' '
 
