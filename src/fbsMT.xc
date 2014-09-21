@@ -13,10 +13,10 @@
 #include <xs1.h>
 #include <print.h>
 #include <platform.h>
+#include <random.h>
 
-#define BIT_RATE 19200
+#define BIT_RATE 57600
 #define BIT_TIME XS1_TIMER_HZ / BIT_RATE
-
 
 // If a positive output turns the beam off (closes the shutter) (SuperSTEM1/Normal)
 //#define ON_STATE 0
@@ -26,18 +26,20 @@
 #define ON_STATE 1
 #define OFF_STATE 0
 
+// 128 bits/setting.  4Mbits total flash memory.
 typedef struct {
-	unsigned int nacqs ;
 	unsigned int setupTime ;
-	unsigned char setupUnits;
 	unsigned int onTime ;
-	unsigned char onUnits;
+	// added 20140915 for compressed sensing applications - waits for defined number of input pulses before advancing to next setting.
+	//    implies sync - it is an error to have random gap > 0 and sync != 1.
+	unsigned int max_random_gap;
 	unsigned char sync;
-	unsigned char output_interleave;
+	unsigned char setupUnits;
+	unsigned char onUnits;
 } timeset ;
 
-timeset ON_SETTING={1,1,'o',1,'o',(char)0,(char)0};
-timeset OFF_SETTING={1,1,'x',1,'x',(char)0,(char)0};
+timeset ON_SETTING={1 /*setup*/, 1 /*onTime*/, 0 /*gap*/, 0 /*sync_ticks (unsync)*/, 'o' /*setupUnits*/, 'o'/*onUnits*/};
+timeset OFF_SETTING={1 /*setup*/, 1 /*onTime*/, 0 /*gap*/, 0 /*sync_ticks (unsync)*/,'x' /*setupUnits*/, 'x'/*onUnits*/};
 
 in port rxd = PORT_UART_RX;
 out port txd = PORT_UART_TX;
@@ -46,12 +48,10 @@ on stdcore[1] : out port out_port2 = XS1_PORT_1A;
 on stdcore[1] : out port clock_out = XS1_PORT_1D;
 on stdcore[1] : in port ext_sync = XS1_PORT_1C;
 
-
 // main thread functions:
 // comm thread
-void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch2, chanend interrupt_ch);
-void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend interrupt_ch, chanend loop_sync, out port out_port);
-void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend loop_sync, out port out_port);
+void getSettings(chanend set_ch1, chanend go_ch1, chanend interrupt_ch);
+void output_master(chanend set_ch, chanend go_ch, chanend interrupt_ch, out port out_port);
 
 // Time delay functions:
 // Determine the amount of time to wait.  Depending on amount of time to wait,
@@ -73,34 +73,25 @@ void chipReset( void );
 
 // thread dispatch
 int main(void){
-	chan set_ch1, set_ch2, go_ch1, go_ch2, thread_sync, loop_sync, interrupt_ch;
+	chan set_ch1, go_ch1, interrupt_ch;
 	par{
 		// getSettings runs on stdcore[0] because the UART ports are on that core.
-		on stdcore[0]: getSettings(set_ch1, go_ch1, set_ch2, go_ch2, interrupt_ch);
+		on stdcore[0]: getSettings(set_ch1, go_ch1, interrupt_ch);
 		// these two functions are on stdcore[1] because their ports are wired to that core.
-		on stdcore[1]: output_master(set_ch1, go_ch1, thread_sync, interrupt_ch, loop_sync, out_port1);
-		on stdcore[1]: output_worker(set_ch2, go_ch2, thread_sync, loop_sync, out_port2);
+		on stdcore[1]: output_master(set_ch1, go_ch1, interrupt_ch, out_port1);
 	}
 	return 0;
 }
 
 // comm thread
-void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch2, chanend interrupt_ch){
-	unsigned char nSettings;
-	// the settings as received from the serial port
-	timeset settings[255];
-	// the settings sent to the first process thread (controls out port 1)
-	timeset set_out_1[255];
-	// the settings sent to the second process thread (controls out port 2)
-	timeset set_out_2[255];
+void getSettings(chanend set_ch1, chanend go_ch1, chanend interrupt_ch){
+	unsigned int nSettings;
 	int pDone;
 	int STOP=1;
 	int GO=0;
-	int ctr;
 	int is_sync=0;
 	timer tmr;
 	unsigned time;
-	int nSet_out;
 
 	while(1)
 		{
@@ -108,16 +99,6 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 			{
 				case go_ch1 :> pDone: // primary process thread is ready for another round
 				{
-					go_ch2 :> pDone;
-					go_ch1 <: GO;
-					go_ch2 <: GO;
-					break;
-				}
-
-				case go_ch2 :> pDone:
-				{
-					go_ch1 :> pDone;
-					go_ch2 <: GO;
 					go_ch1 <: GO;
 					break;
 				}
@@ -139,88 +120,59 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 					{
 						case go_ch1 :> pDone:
 						{
-							go_ch2 :> pDone;
-							break;
-						}
-						case go_ch2 :> pDone:
-						{
-							go_ch1 :> pDone;
 							break;
 						}
 					}
 					// tell processes to wait for new input
 					go_ch1 <: STOP;
-					go_ch2 <: STOP;
 					// tell computer you're ready for data
 					txByte(255);
-					nSettings=rxByte(); // get number of settings
+					nSettings=rxInt(); // get number of settings
 					// tell number of settings to process threads
+
 					// nsettings = 0 means close shutter
 					if (nSettings == 0){
 						// dispatch one setting to either output thread
 						set_ch1 <: (unsigned char)1;
-						set_ch2 <: (unsigned char)1;
 						// tell the primary output to blank
 						set_ch1 <: OFF_SETTING;
-						// the secondary output should stay on
-						// unless explicitly specified to be off.
-						set_ch2 <: ON_SETTING;
 						is_sync=0;
 					}
+
 					// nsettings = 255 means open shutter
 					else if (nSettings == 255){
 						// dispatch one setting to either output thread
 						set_ch1 <: (unsigned char)1;
-						set_ch2 <: (unsigned char)1;
 						// tell the primary output to blank
 						set_ch1 <: ON_SETTING;
-						// the secondary output should stay on
-						// unless explicitly specified to be off.
-						set_ch2 <: ON_SETTING;
 						is_sync=0;
 					}
+
 					// anything else is a series of on/off sequences
 					else
 					{
-						// acquire each sequence of settings
-						for (int i = 0; i < nSettings; i += 1) {
-							settings[i].nacqs=rxInt();
-							settings[i].setupTime=rxInt();
-							settings[i].setupUnits=rxByte();
-							settings[i].onTime=rxInt();
-							settings[i].onUnits=rxByte();
-							settings[i].sync=rxByte();
-							settings[i].output_interleave=rxByte();
-						}
-						ctr=0;
-						is_sync=0;
-						nSet_out=nSettings;
-						while (ctr < nSettings) {
-							if ((settings[ctr].sync>0)) {
-								is_sync=1;
-							}
-							if (settings[ctr].output_interleave==1){
-								set_out_1[ctr] = settings[ctr];
-								set_out_2[ctr] = settings[ctr+1];
-								if (set_out_1[ctr].nacqs != set_out_2[ctr].nacqs) chipReset();
-								ctr+=1;
-								nSet_out-=1;
-							}
-							else {
-								set_out_1[ctr] = settings[ctr];
-								// If not interleaving outputs, keep output 2 ON!
-								settings[ctr].onUnits='o';
-								set_out_2[ctr] = settings[ctr];
-								ctr+=1;
-							}
+					    timeset setting;
 
-						}
+						is_sync=0;
+
 						set_ch1 <: nSettings;
-						set_ch2 <: nSettings;
-						for (int i=0; i < nSet_out; i+=1) {
-							set_ch1 <: set_out_1[i];
-							set_ch2 <: set_out_2[i];
-						}
+
+						// acquire each sequence of settings
+                        for (int i = 0; i < nSettings; i += 1)
+                        {
+                            setting.setupTime=rxInt();
+                            setting.onTime=rxInt();
+                            setting.max_random_gap=rxInt();
+                            setting.sync=rxByte();
+                            setting.setupUnits=rxByte();
+                            setting.onUnits=rxByte();
+
+                            if (setting.max_random_gap > 0 || setting.sync > 0)
+                            {
+                                is_sync=1;
+                            }
+                            set_ch1 <: setting;
+                        }
 					}
 					break;
 				}
@@ -228,12 +180,16 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend set_ch2, chanend go_ch
 		}
 }
 
-void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend interrupt_ch, chanend loop_sync, out port out_port) {
+void output_master(chanend set_ch, chanend go_ch, chanend interrupt_ch, out port out_port) {
 	unsigned char nSettings=1;
 	timeset settings[255];
 	int DONE=1;
 	int stop=0;
-	int sync, set_ct, break_loop;
+	int set_ct, break_loop;
+
+	// devilish seed for random numbers
+	const unsigned seed = 666;
+	random_generator_t generator = random_create_generator_from_seed(seed);
 
 	settings[0]=ON_SETTING;
 
@@ -249,7 +205,7 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 					setDelay(20,'u',out_port,OFF_STATE,OFF_STATE);
 					// loop through any number of settings, making sure that master
 					// and worker threads are in sync.
-					for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1) loop_sync :> sync;
+					//for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1) loop_sync :> sync;
 					break;
 				}
 				case 111: {
@@ -257,7 +213,7 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 					setDelay(20,'u',out_port,ON_STATE,ON_STATE);
 					// loop through any number of settings, making sure that master
 					// and worker threads are in sync.
-					for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1) loop_sync :> sync;
+					//for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1) loop_sync :> sync;
 					break;
 				}
 				default: {
@@ -266,72 +222,102 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 					out_port <: OFF_STATE;
 					// camera hardware sync signal
 					// wait until camera signals that it is acquiring
-					switch (settings[set_ct].sync) {
-					case 1: {
+					if (settings[set_ct].max_random_gap > 0 || settings[set_ct].sync > 0)
+					{
 						select {
 							//waits for sync signal
 							case ext_sync when pinseq (1) :> void:
 							{
 								// wait to receive a sync pulse from ext_sync1
-								// outputs sync signal to worker thread
-								// break_loop should be 0, unless set to 1 previously.
-								thread_sync <: break_loop;
 								break;
 							}
 							// Any interrupt will set break_loop to 1 here.
 							// That will break the settings loop.
 							case interrupt_ch :> break_loop:
 							{
-								// Tell the worker thread to stop.
-								thread_sync <: break_loop;
 								// go to beginning of settings loop, which should not
 								// enter another iteration now that break_loop is 1.
 								continue;
 								break;
 							}
 						}
-						break;
 					}
-					default:
-						break;
-				}
-				for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1){
-					// output clock signal - advance 1 pixel
-					clock_out <: 1;
-					setDelay(settings[set_ct].setupTime,settings[set_ct].setupUnits,out_port,OFF_STATE,OFF_STATE);
-					setDelay(settings[set_ct].onTime,settings[set_ct].onUnits,out_port,ON_STATE,OFF_STATE);
-					// Wait until worker thread is done with this loop
-					loop_sync :> sync;
-					// reset clock signal
-					clock_out <: 0;
-				}
-				// camera hardware sync signal
-				// wait until camera signals that it is done acquiring.
-				switch (settings[set_ct].sync) {
-					case 1: {
-						select {
-						//waits for sync signal
-						case ext_sync when pinseq (0) :> void:
-						{
-							// outputs sync signal to worker thread
-							// break_loop should be 0, unless set to 1 previously.
-							thread_sync <: break_loop;
-							break;
-						}
-						case interrupt_ch :> break_loop:
-						{
-							thread_sync <: break_loop;
-							continue;
-							break;
-						}
-						}
-						break;
-					}
-					default:
-						// no sync
-						break;
-					}
-					break;
+                    //for (unsigned j = 0; j < settings[set_ct].nacqs; j += 1){
+                        // output clock signal - advance 1 pixel
+                        clock_out <: 1;
+                        setDelay(settings[set_ct].setupTime,settings[set_ct].setupUnits,out_port,OFF_STATE,OFF_STATE);
+                        setDelay(settings[set_ct].onTime,settings[set_ct].onUnits,out_port,ON_STATE,OFF_STATE);
+                        // reset clock signal
+                        clock_out <: 0;
+                    //}
+
+                    // compressed sensing stuff - only kicks in if max_random_gap > 0.  only makes sense if sync is also true, but we don't check that here.
+                    if (settings[set_ct].max_random_gap > 0)
+                    {
+                        unsigned int gap = random_get_random_number(generator) % settings[set_ct].max_random_gap;
+                        // For compressive sensing: wait for multiple external clock inputs - these are each blanked pixels.
+                        for (unsigned tick=0; tick < gap; tick += 1)
+                        {
+                            // Wait for sync pulse edge to fall
+                            select
+                            {
+                                //waits for sync signal
+                                case ext_sync when pinseq (0) :> void:
+                                {
+                                    // wait to receive a sync pulse from ext_sync1
+                                    break;
+                                }
+                                // Any interrupt will set break_loop to 1 here.
+                                // That will break the settings loop.
+                                case interrupt_ch :> break_loop:
+                                {
+                                    // go to beginning of settings loop, which should not
+                                    // enter another iteration now that break_loop is 1.
+                                    continue;
+                                    break;
+                                }
+                            }
+
+                            //waits for sync signal to rise
+                            select
+                            {
+                                case ext_sync when pinseq (1) :> void:
+                                {
+                                    // wait to receive a sync pulse from ext_sync1
+                                    break;
+                                }
+                                // Any interrupt will set break_loop to 1 here.
+                                // That will break the settings loop.
+                                case interrupt_ch :> break_loop:
+                                {
+                                    // go to beginning of settings loop, which should not
+                                    // enter another iteration now that break_loop is 1.
+                                    continue;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    // camera hardware sync signal
+                    // wait until camera signals that it is done acquiring.
+                    if (settings[set_ct].max_random_gap > 0 || settings[set_ct].sync > 0)
+                    {
+                        select {
+                            //waits for sync signal
+                            case ext_sync when pinseq (0) :> void:
+                            {
+                                break;
+                            }
+                            case interrupt_ch :> break_loop:
+                            {
+                                continue;
+                                break;
+                            }
+                            }
+                            break;
+                        }
+                    break;
 				} // end default case (process settings aside from on/off)
 			}
 			// loop to next setting
@@ -353,85 +339,6 @@ void output_master(chanend set_ch, chanend go_ch, chanend thread_sync, chanend i
 	}
 }
 
-void output_worker(chanend set_ch, chanend go_ch, chanend thread_sync, chanend loop_sync, out port out_port) {
-	unsigned char nSettings=1;
-	timeset settings[255];
-	int stop;
-	int DONE=1;
-	int sync=1;
-
-	settings[0]=ON_SETTING;
-
-	while (1) {
-		int i=0;
-		int break_loop=0;
-		while ((i<nSettings)&&(!break_loop)) {
-			switch (settings[i].onUnits) {
-			case 120:
-				out_port <: OFF_STATE;
-				if (settings[i].sync>0) {
-					// wait until master thread sends sync signal
-					// sync signal also indicates whether master has been interrupted.
-					// if it has been, break_loop will be obtained as 1 here.
-					thread_sync :> break_loop;
-					// if master thread has been interrupted, break the settings loop.
-					// the continue will return to the while condition check, which
-					// will now be false.
-					if (break_loop) continue;
-				}
-				for (unsigned j = 0; j < settings[i].nacqs; j += 1) loop_sync <: sync;
-				if (settings[i].sync>0) {
-					thread_sync :> break_loop;
-					if (break_loop) continue;
-				}
-				break;
-			case 111:
-				out_port <: ON_STATE;
-				if (settings[i].sync>0) {
-					thread_sync :> break_loop;
-					if (break_loop) continue;
-				}
-				for (unsigned j = 0; j < settings[i].nacqs; j += 1) loop_sync <: sync;
-				if (settings[i].sync>0) {
-					thread_sync :> break_loop;
-					if (break_loop) continue;
-				}
-				break;
-			default:
-				if (settings[i].sync>0) {
-					thread_sync :> break_loop;
-					if (break_loop) continue;
-				}
-				for (unsigned j = 0; j < settings[i].nacqs; j += 1){
-					// set output times & execute port activation/deactivation
-					setDelay(settings[i].setupTime,settings[i].setupUnits,out_port,OFF_STATE,OFF_STATE);
-					setDelay(settings[i].onTime,settings[i].onUnits,out_port,ON_STATE,OFF_STATE);
-					// tell master thread you're done with this loop
-					loop_sync <: sync;
-				}
-				if (settings[i].sync>0) {
-					thread_sync :> break_loop;
-					if (break_loop) continue;
-				}
-				break;
-			}
-			i++;
-		}
-
-		// tell comm thread you're done
-		go_ch <: DONE;
-		// ask comm thread whether or not to go again.
-		go_ch :> stop;
-		if (stop == DONE) {
-			// read the number of settings from getSettings
-			set_ch :> nSettings;
-			for (int i = 0; i < nSettings; i+=1) {
-				// read each setting into thread-local settings buffer
-				set_ch :> settings[i];
-			}
-		}
-	}
-}
 
 void setDelay(int time, unsigned char units, out port out_port, unsigned char signal, unsigned char endstate){
 	int carry=0;
