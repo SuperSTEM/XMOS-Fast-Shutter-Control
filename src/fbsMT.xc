@@ -15,7 +15,7 @@
 #include <platform.h>
 #include <random.h>
 
-#define BIT_RATE 57600
+#define BIT_RATE 19200
 #define BIT_TIME XS1_TIMER_HZ / BIT_RATE
 
 // If a positive output turns the beam off (closes the shutter) (SuperSTEM1/Normal)
@@ -92,6 +92,7 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend interrupt_ch){
 	int is_sync=0;
 	timer tmr;
 	unsigned time;
+	timeset settings[255];  // tempoorary storage of settings
 
 	while(1)
 		{
@@ -127,7 +128,7 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend interrupt_ch){
 					go_ch1 <: STOP;
 					// tell computer you're ready for data
 					txByte(255);
-					nSettings=rxInt(); // get number of settings
+					nSettings=rxByte(); // get number of settings
 					// tell number of settings to process threads
 
 					// nsettings = 0 means close shutter
@@ -151,27 +152,28 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend interrupt_ch){
 					// anything else is a series of on/off sequences
 					else
 					{
-					    timeset setting;
-
 						is_sync=0;
-
-						set_ch1 <: nSettings;
 
 						// acquire each sequence of settings
                         for (int i = 0; i < nSettings; i += 1)
                         {
-                            setting.setupTime=rxInt();
-                            setting.onTime=rxInt();
-                            setting.max_random_gap=rxInt();
-                            setting.sync=rxByte();
-                            setting.setupUnits=rxByte();
-                            setting.onUnits=rxByte();
+                            settings[i].setupTime=rxInt();
+                            settings[i].onTime=rxInt();
+                            settings[i].max_random_gap=rxInt();
+                            settings[i].sync=rxByte();
+                            settings[i].setupUnits=rxByte();
+                            settings[i].onUnits=rxByte();
 
-                            if (setting.max_random_gap > 0 || setting.sync > 0)
+                            if (settings[i].max_random_gap > 0 || settings[i].sync > 0)
                             {
                                 is_sync=1;
                             }
-                            set_ch1 <: setting;
+                        }
+                        // this sends the settings to the worker thread.
+                        set_ch1 <: nSettings;
+                        for (int i = 0; i < nSettings; i += 1)
+                        {
+                            set_ch1 <: settings[i];
                         }
 					}
 					break;
@@ -181,7 +183,7 @@ void getSettings(chanend set_ch1, chanend go_ch1, chanend interrupt_ch){
 }
 
 void output_master(chanend set_ch, chanend go_ch, chanend interrupt_ch, out port out_port) {
-	unsigned char nSettings=1;
+	unsigned int nSettings=1;
 	timeset settings[255];
 	int DONE=1;
 	int stop=0;
@@ -258,6 +260,11 @@ void output_master(chanend set_ch, chanend go_ch, chanend interrupt_ch, out port
                         // For compressive sensing: wait for multiple external clock inputs - these are each blanked pixels.
                         for (unsigned tick=0; tick < gap; tick += 1)
                         {
+                            // break out of the for loop to avoid waiting on synchronization
+                            if (break_loop)
+                            {
+                                break;
+                            }
                             // Wait for sync pulse edge to fall
                             select
                             {
@@ -278,22 +285,25 @@ void output_master(chanend set_ch, chanend go_ch, chanend interrupt_ch, out port
                                 }
                             }
 
-                            //waits for sync signal to rise
-                            select
+                            if (!break_loop)
                             {
-                                case ext_sync when pinseq (1) :> void:
+                                //waits for sync signal to rise
+                                select
                                 {
-                                    // wait to receive a sync pulse from ext_sync1
-                                    break;
-                                }
-                                // Any interrupt will set break_loop to 1 here.
-                                // That will break the settings loop.
-                                case interrupt_ch :> break_loop:
-                                {
-                                    // go to beginning of settings loop, which should not
-                                    // enter another iteration now that break_loop is 1.
-                                    continue;
-                                    break;
+                                    case ext_sync when pinseq (1) :> void:
+                                    {
+                                        // wait to receive a sync pulse from ext_sync1
+                                        break;
+                                    }
+                                    // Any interrupt will set break_loop to 1 here.
+                                    // That will break the settings loop.
+                                    case interrupt_ch :> break_loop:
+                                    {
+                                        // go to beginning of settings loop, which should not
+                                        // enter another iteration now that break_loop is 1.
+                                        continue;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -301,7 +311,7 @@ void output_master(chanend set_ch, chanend go_ch, chanend interrupt_ch, out port
 
                     // camera hardware sync signal
                     // wait until camera signals that it is done acquiring.
-                    if (settings[set_ct].max_random_gap > 0 || settings[set_ct].sync > 0)
+                    if (!break_loop && (settings[set_ct].max_random_gap > 0 || settings[set_ct].sync > 0))
                     {
                         select {
                             //waits for sync signal
